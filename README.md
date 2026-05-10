@@ -30,15 +30,27 @@ user id. Uploads from the web panel are forwarded into your DM with the
 bot so we can capture a real Telegram `file_id`. Open a chat with your
 new bot and press **Start** so it can DM you.
 
-### 3. Configure & run
+### 3. Configure
 
 ```bash
 cp .env.example .env
 # edit .env with BOT_TOKEN, ADMIN_CHAT_ID, ADMIN_PASSWORD, SESSION_SECRET
+```
 
+### 4. Run with Docker (recommended)
+
+```bash
+docker compose up --build
+```
+
+The SQLite DB is stored in a named volume (`sounds_data`), so it
+survives rebuilds and `docker compose down`.
+
+### 4b. Run without Docker
+
+```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
 python -m app.main
 ```
 

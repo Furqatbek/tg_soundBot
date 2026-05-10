@@ -1,0 +1,14 @@
+services:
+  bot:
+    build: .
+    container_name: tg_soundbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - sounds_data:/data
+
+volumes:
+  sounds_data:
