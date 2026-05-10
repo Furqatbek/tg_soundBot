@@ -9,10 +9,41 @@
 </div>
 
 <div class="card">
+  <h3>Packs</h3>
+  <form method="post" action="/packs">
+    <input type="text" name="name" placeholder="new pack name" required />
+    <button type="submit">Create</button>
+  </form>
+  {% if packs %}
+    <ul style="list-style:none; padding:0; margin:.75rem 0 0">
+    {% for p in packs %}
+      <li style="margin-bottom:.25rem">
+        <a href="/?pack={{ p.slug }}">{{ p.name }}</a>
+        <span class="muted">/{{ p.slug }}</span>
+        <form method="post" action="/packs/{{ p.id }}/delete"
+              onsubmit="return confirm('Delete pack {{ p.name }}? Sounds will be detached, not deleted.')"
+              style="display:inline; margin-left:.5rem">
+          <button type="submit">delete</button>
+        </form>
+      </li>
+    {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No packs yet. Create one to group related sounds.</p>
+  {% endif %}
+</div>
+
+<div class="card">
   <h3>Upload one</h3>
   <form method="post" action="/sounds" enctype="multipart/form-data">
     <input type="text" name="name" placeholder="name (e.g. bruh)" required />
     <input type="text" name="tags" placeholder="tags, comma separated" />
+    <select name="pack_id">
+      <option value="">— no pack —</option>
+      {% for p in packs %}
+        <option value="{{ p.id }}">{{ p.name }}</option>
+      {% endfor %}
+    </select>
     <input type="file" name="file" accept="audio/*,video/*,application/octet-stream" required />
     <button type="submit">Upload</button>
   </form>
@@ -25,27 +56,40 @@
   <h3>Bulk upload</h3>
   <form method="post" action="/sounds/bulk" enctype="multipart/form-data">
     <input type="text" name="tags" placeholder="tags applied to all (optional)" />
+    <select name="pack_id">
+      <option value="">— no pack —</option>
+      {% for p in packs %}
+        <option value="{{ p.id }}">{{ p.name }}</option>
+      {% endfor %}
+    </select>
     <input type="file" name="files" accept="audio/*,video/*,application/octet-stream" multiple required />
     <button type="submit">Upload all</button>
   </form>
   <p class="muted">
-    Each file's name (without extension) becomes the sound name. The tags
-    field above is applied to every uploaded file.
+    Each file's name (without extension) becomes the sound name. Tags and
+    pack apply to every uploaded file.
   </p>
 </div>
 
 <form method="get" action="/" style="margin-bottom:.5rem">
   <input type="text" name="q" value="{{ q or '' }}" placeholder="search name or tags" />
+  {% if current_pack %}
+    <input type="hidden" name="pack" value="{{ current_pack.slug }}" />
+  {% endif %}
   <button type="submit">Search</button>
-  {% if q %}<a href="/">clear</a>{% endif %}
+  {% if q or current_pack %}<a href="/">clear</a>{% endif %}
 </form>
 
+{% if current_pack %}
+  <p class="muted">Filtering pack: <strong>{{ current_pack.name }}</strong> &middot; <a href="/{% if q %}?q={{ q }}{% endif %}">show all packs</a></p>
+{% endif %}
+
 {% if not sounds %}
-  <p class="muted">No sounds yet. Upload one above.</p>
+  <p class="muted">No sounds match. Try clearing the filter or uploading one.</p>
 {% else %}
 <table>
   <thead>
-    <tr><th>Preview</th><th>Name</th><th>Tags</th><th>Kind</th><th>Plays</th><th></th></tr>
+    <tr><th>Preview</th><th>Name</th><th>Tags</th><th>Pack</th><th>Kind</th><th>Plays</th><th></th></tr>
   </thead>
   <tbody>
   {% for s in sounds %}
@@ -63,6 +107,14 @@
       </td>
       <td>
           <input type="text" name="tags" value="{{ s.tags }}" />
+      </td>
+      <td>
+          <select name="pack_id">
+            <option value="">—</option>
+            {% for p in packs %}
+              <option value="{{ p.id }}" {% if s.pack_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+            {% endfor %}
+          </select>
       </td>
       <td>{{ s.kind }}</td>
       <td>{{ s.play_count }}</td>

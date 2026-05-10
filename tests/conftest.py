@@ -55,14 +55,17 @@ web_module.SessionLocal = db_module.SessionLocal
 
 @pytest.fixture(autouse=True)
 def _reset_state():
-    """Truncate sounds table and wipe uploads dir before every test."""
-    from app.db import Base
+    """Truncate tables, set up FTS5, and wipe uploads dir before every test."""
+    from app.db import FTS_SETUP, Base
 
     sync_url = os.environ["DATABASE_URL"].replace("sqlite+aiosqlite", "sqlite")
     eng = create_engine(sync_url)
     Base.metadata.create_all(eng)  # idempotent
     with eng.begin() as conn:
+        for ddl in FTS_SETUP:
+            conn.exec_driver_sql(ddl)
         conn.exec_driver_sql("DELETE FROM sounds")
+        conn.exec_driver_sql("DELETE FROM packs")
     eng.dispose()
 
     shutil.rmtree(_UPLOAD_DIR, ignore_errors=True)

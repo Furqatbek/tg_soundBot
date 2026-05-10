@@ -354,6 +354,140 @@ def test_index_renders_audio_preview_link(client):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Packs
+# ---------------------------------------------------------------------------
+
+
+def _pack_id_for(slug: str) -> int:
+    import sqlite3
+
+    db_path = os.environ["DATABASE_URL"].split("///")[-1]
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT id FROM packs WHERE slug = ?", (slug,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None, f"pack {slug!r} not found"
+    return row[0]
+
+
+def test_create_pack_slugifies_name(client):
+    login(client)
+    r = client.post(
+        "/packs", data={"name": "Air Horns!"}, follow_redirects=False
+    )
+    assert r.status_code == 303
+    body = client.get("/").text
+    assert "Air Horns!" in body
+    assert "/air-horns" in body  # slug
+
+
+def test_create_pack_dedupes_by_slug(client):
+    login(client)
+    client.post("/packs", data={"name": "Horns"})
+    client.post("/packs", data={"name": "Horns"})  # second should be a no-op
+    body = client.get("/").text
+    assert body.count("/horns") == 1
+
+
+def test_pack_filter_in_listing(client):
+    login(client)
+    client.post("/packs", data={"name": "Horns"})
+    pid = _pack_id_for("horns")
+
+    client.post(
+        "/sounds",
+        data={"name": "in_pack", "tags": "", "pack_id": str(pid)},
+        files={"file": ("a.mp3", b"X", "audio/mpeg")},
+    )
+    client.post(
+        "/sounds",
+        data={"name": "outside", "tags": "", "pack_id": ""},
+        files={"file": ("b.mp3", b"X", "audio/mpeg")},
+    )
+
+    body = client.get("/?pack=horns").text
+    assert "in_pack" in body
+    assert "outside" not in body
+
+
+def test_unknown_pack_filter_shows_no_rows(client):
+    login(client)
+    client.post(
+        "/sounds",
+        data={"name": "x", "tags": ""},
+        files={"file": ("a.mp3", b"X", "audio/mpeg")},
+    )
+    body = client.get("/?pack=does-not-exist").text
+    assert ">x<" not in body
+
+
+def test_delete_pack_detaches_sounds(client):
+    login(client)
+    client.post("/packs", data={"name": "Horns"})
+    pid = _pack_id_for("horns")
+    client.post(
+        "/sounds",
+        data={"name": "stayer", "tags": "", "pack_id": str(pid)},
+        files={"file": ("a.mp3", b"X", "audio/mpeg")},
+    )
+
+    r = client.post(f"/packs/{pid}/delete", follow_redirects=False)
+    assert r.status_code == 303
+
+    body = client.get("/").text
+    assert "stayer" in body
+    assert "/horns" not in body
+
+
+def test_edit_can_assign_pack(client):
+    login(client)
+    client.post("/packs", data={"name": "Horns"})
+    pid = _pack_id_for("horns")
+    client.post(
+        "/sounds",
+        data={"name": "thing", "tags": ""},
+        files={"file": ("a.mp3", b"X", "audio/mpeg")},
+    )
+    [sid] = _ids_from_html(client.get("/").text)
+
+    r = client.post(
+        f"/sounds/{sid}/edit",
+        data={"name": "thing", "tags": "", "pack_id": str(pid)},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+
+    # Filtering by the pack now finds it.
+    body = client.get("/?pack=horns").text
+    assert "thing" in body
+
+
+# ---------------------------------------------------------------------------
+# FTS prefix search
+# ---------------------------------------------------------------------------
+
+
+def test_search_uses_fts_prefix_match(client):
+    login(client)
+    client.post(
+        "/sounds",
+        data={"name": "bruh", "tags": ""},
+        files={"file": ("a.mp3", b"X", "audio/mpeg")},
+    )
+    client.post(
+        "/sounds",
+        data={"name": "laser", "tags": ""},
+        files={"file": ("b.mp3", b"X", "audio/mpeg")},
+    )
+    body = client.get("/?q=bru").text
+    assert "bruh" in body
+    assert "laser" not in body
+
+
 def test_index_orders_by_plays_then_recency(client):
     login(client)
     client.post(

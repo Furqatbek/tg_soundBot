@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import func, or_, select, update as sql_update
+from sqlalchemy import func, select, update as sql_update
 from telegram import (
     BotCommand,
     InlineQueryResultCachedAudio,
@@ -22,7 +22,8 @@ from telegram.ext import (
 
 from .config import ADMIN_CHAT_ID, BOT_TOKEN
 from .db import SessionLocal
-from .models import Sound
+from .models import Pack, Sound
+from .search import parse_query, search_sounds
 
 log = logging.getLogger(__name__)
 
@@ -128,20 +129,22 @@ def _build_result(snd: Sound):
 
 
 async def handle_inline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = (update.inline_query.query or "").strip()
-    order = (Sound.play_count.desc(), Sound.created_at.desc())
+    raw = update.inline_query.query or ""
+    pack_slug, text_query = parse_query(raw)
+
     async with SessionLocal() as session:
-        if query:
-            like = f"%{query}%"
-            stmt = (
-                select(Sound)
-                .where(or_(Sound.name.ilike(like), Sound.tags.ilike(like)))
-                .order_by(*order)
-                .limit(50)
-            )
-        else:
-            stmt = select(Sound).order_by(*order).limit(50)
-        rows = (await session.execute(stmt)).scalars().all()
+        pack_id = None
+        if pack_slug:
+            pack = (
+                await session.execute(select(Pack).where(Pack.slug == pack_slug))
+            ).scalar_one_or_none()
+            if pack is None:
+                # Unknown pack -> show nothing rather than the full catalog.
+                await update.inline_query.answer([], cache_time=1, is_personal=False)
+                return
+            pack_id = pack.id
+
+        rows = await search_sounds(session, text_query=text_query, pack_id=pack_id)
 
     results = [_build_result(s) for s in rows]
     await update.inline_query.answer(results, cache_time=1, is_personal=False)

@@ -386,6 +386,70 @@ async def test_cmd_list_with_no_sounds():
     assert "No sounds" in msg.reply_text.await_args.args[0]
 
 
+async def test_inline_fts_matches_prefix():
+    await _seed(
+        Sound(name="bruh", tags="", file_id="f1", file_unique_id="u1", kind="voice"),
+        Sound(name="laser", tags="", file_id="f2", file_unique_id="u2", kind="audio"),
+    )
+    update, iq = _make_inline_update("bru")
+    await bot_module.handle_inline(update, MagicMock())
+    results = iq.answer.await_args.args[0]
+    assert len(results) == 1
+    assert results[0].voice_file_id == "f1"
+
+
+async def test_inline_pack_filter():
+    from app.models import Pack
+
+    async with SessionLocal() as session:
+        horns = Pack(name="Horns", slug="horns")
+        memes = Pack(name="Memes", slug="memes")
+        session.add_all([horns, memes])
+        await session.commit()
+        session.add_all([
+            Sound(name="airhorn", tags="", file_id="f1", file_unique_id="u1",
+                  kind="audio", pack_id=horns.id),
+            Sound(name="bruh", tags="", file_id="f2", file_unique_id="u2",
+                  kind="voice", pack_id=memes.id),
+        ])
+        await session.commit()
+
+    update, iq = _make_inline_update("pack:horns")
+    await bot_module.handle_inline(update, MagicMock())
+    results = iq.answer.await_args.args[0]
+    assert [r.audio_file_id for r in results] == ["f1"]
+
+
+async def test_inline_pack_filter_with_text():
+    from app.models import Pack
+
+    async with SessionLocal() as session:
+        horns = Pack(name="Horns", slug="horns")
+        session.add(horns)
+        await session.commit()
+        session.add_all([
+            Sound(name="airhorn", tags="loud", file_id="f1", file_unique_id="u1",
+                  kind="audio", pack_id=horns.id),
+            Sound(name="dinghorn", tags="soft", file_id="f2", file_unique_id="u2",
+                  kind="audio", pack_id=horns.id),
+        ])
+        await session.commit()
+
+    update, iq = _make_inline_update("pack:horns air")
+    await bot_module.handle_inline(update, MagicMock())
+    results = iq.answer.await_args.args[0]
+    assert [r.audio_file_id for r in results] == ["f1"]
+
+
+async def test_inline_unknown_pack_returns_empty():
+    await _seed(
+        Sound(name="x", tags="", file_id="f1", file_unique_id="u1", kind="audio"),
+    )
+    update, iq = _make_inline_update("pack:nope")
+    await bot_module.handle_inline(update, MagicMock())
+    assert iq.answer.await_args.args[0] == []
+
+
 async def test_post_init_calls_set_my_commands():
     ctx, bot = _ctx_with_fake_bot()
     fake_app = MagicMock()
