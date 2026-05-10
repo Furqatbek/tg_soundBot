@@ -1,3 +1,4 @@
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base
 
@@ -6,6 +7,33 @@ from .config import DATABASE_URL
 Base = declarative_base()
 engine = create_async_engine(DATABASE_URL, future=True)
 SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+def attach_sqlite_pragmas(target_engine) -> None:
+    """Set WAL + sane defaults on every new SQLite connection.
+
+    No-op for non-SQLite engines, so swapping in Postgres later just
+    skips this.
+    """
+
+    @event.listens_for(target_engine.sync_engine, "connect")
+    def _set_pragmas(dbapi_conn, _):
+        if target_engine.url.get_backend_name() != "sqlite":
+            return
+        cur = dbapi_conn.cursor()
+        # WAL = readers don't block writers and vice versa. ~5-10x more
+        # write throughput than the default rollback journal.
+        cur.execute("PRAGMA journal_mode=WAL")
+        # synchronous=NORMAL is safe with WAL (only risk is losing the
+        # very last in-flight commit on a hard power loss, never corruption).
+        cur.execute("PRAGMA synchronous=NORMAL")
+        # FK constraints are off by default in SQLite; turn them on so
+        # ForeignKey() in the models actually does something.
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
+
+
+attach_sqlite_pragmas(engine)
 
 
 # DDL we run against an existing database to bring it forward. ALTER TABLE

@@ -48,6 +48,7 @@ db_module.engine = create_async_engine(os.environ["DATABASE_URL"], poolclass=Nul
 db_module.SessionLocal = async_sessionmaker(
     db_module.engine, class_=AsyncSession, expire_on_commit=False
 )
+db_module.attach_sqlite_pragmas(db_module.engine)
 # Modules captured the original SessionLocal at import time; rebind them.
 bot_module.SessionLocal = db_module.SessionLocal
 web_module.SessionLocal = db_module.SessionLocal
