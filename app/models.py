@@ -16,4 +16,5 @@ class Sound(Base):
     mime_type = Column(String(120))
     duration = Column(Integer)
     storage_path = Column(String(500))
+    play_count = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now())

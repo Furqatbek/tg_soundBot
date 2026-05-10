@@ -128,6 +128,9 @@ class FakeBot:
 
         return _Me()
 
+    async def set_my_commands(self, commands):
+        self.calls.append(("set_my_commands", [c.command for c in commands]))
+
 
 class FakeApp:
     def __init__(self):

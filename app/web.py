@@ -4,11 +4,12 @@ import io
 import mimetypes
 import os
 from contextlib import asynccontextmanager
+from typing import List
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
 
 from .config import (
@@ -30,6 +31,55 @@ def _logged_in(request: Request) -> bool:
 
 def _redirect_login() -> RedirectResponse:
     return RedirectResponse("/login", status_code=303)
+
+
+async def _save_one(bot_app, file: UploadFile, name: str, tags: str) -> None:
+    """Forward a file to the admin chat and persist a Sound row + on-disk copy."""
+    data = await file.read()
+    filename = file.filename or "sound"
+    ext = os.path.splitext(filename)[1].lower()
+    mime = (
+        file.content_type
+        or mimetypes.guess_type(filename)[0]
+        or "application/octet-stream"
+    )
+
+    bio = io.BytesIO(data)
+    bio.name = filename
+
+    bot = bot_app.bot
+    name = name.strip()
+    marker = f"[uploaded] {name}"
+    if mime.startswith("audio/ogg") or ext in (".ogg", ".oga", ".opus"):
+        sent = await bot.send_voice(ADMIN_CHAT_ID, voice=bio, caption=marker)
+        kind, obj = "voice", sent.voice
+    elif mime.startswith("audio/"):
+        sent = await bot.send_audio(
+            ADMIN_CHAT_ID, audio=bio, caption=marker, title=name
+        )
+        kind, obj = "audio", sent.audio
+    else:
+        sent = await bot.send_document(ADMIN_CHAT_ID, document=bio, caption=marker)
+        kind, obj = "document", sent.document
+
+    storage_path = os.path.join(UPLOAD_DIR, f"{obj.file_unique_id}{ext}")
+    with open(storage_path, "wb") as fh:
+        fh.write(data)
+
+    async with SessionLocal() as session:
+        session.add(
+            Sound(
+                name=name,
+                tags=tags.strip(),
+                file_id=obj.file_id,
+                file_unique_id=obj.file_unique_id,
+                kind=kind,
+                mime_type=getattr(obj, "mime_type", mime),
+                duration=getattr(obj, "duration", None),
+                storage_path=storage_path,
+            )
+        )
+        await session.commit()
 
 
 def create_app(bot_app) -> FastAPI:
@@ -73,7 +123,9 @@ def create_app(bot_app) -> FastAPI:
             return _redirect_login()
         q = (request.query_params.get("q") or "").strip()
         async with SessionLocal() as session:
-            stmt = select(Sound).order_by(Sound.created_at.desc())
+            stmt = select(Sound).order_by(
+                Sound.play_count.desc(), Sound.created_at.desc()
+            )
             if q:
                 like = f"%{q}%"
                 stmt = stmt.where(
@@ -95,49 +147,40 @@ def create_app(bot_app) -> FastAPI:
     ):
         if not _logged_in(request):
             return _redirect_login()
-
-        data = await file.read()
-        filename = file.filename or "sound"
-        ext = os.path.splitext(filename)[1].lower()
-        mime = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-
-        bio = io.BytesIO(data)
-        bio.name = filename
-
-        bot = bot_app.bot
-        marker = f"[uploaded] {name}"
-        if mime.startswith("audio/ogg") or ext in (".ogg", ".oga", ".opus"):
-            sent = await bot.send_voice(ADMIN_CHAT_ID, voice=bio, caption=marker)
-            kind, obj = "voice", sent.voice
-        elif mime.startswith("audio/"):
-            sent = await bot.send_audio(
-                ADMIN_CHAT_ID, audio=bio, caption=marker, title=name
-            )
-            kind, obj = "audio", sent.audio
-        else:
-            sent = await bot.send_document(ADMIN_CHAT_ID, document=bio, caption=marker)
-            kind, obj = "document", sent.document
-
-        storage_path = os.path.join(UPLOAD_DIR, f"{obj.file_unique_id}{ext}")
-        with open(storage_path, "wb") as fh:
-            fh.write(data)
-
-        async with SessionLocal() as session:
-            session.add(
-                Sound(
-                    name=name.strip(),
-                    tags=tags.strip(),
-                    file_id=obj.file_id,
-                    file_unique_id=obj.file_unique_id,
-                    kind=kind,
-                    mime_type=getattr(obj, "mime_type", mime),
-                    duration=getattr(obj, "duration", None),
-                    storage_path=storage_path,
-                )
-            )
-            await session.commit()
-
+        await _save_one(bot_app, file, name, tags)
         return RedirectResponse("/", status_code=303)
+
+    @app.post("/sounds/bulk")
+    async def upload_bulk(
+        request: Request,
+        tags: str = Form(""),
+        files: List[UploadFile] = File(...),
+    ):
+        if not _logged_in(request):
+            return _redirect_login()
+        for f in files:
+            if not f.filename:
+                continue
+            name = os.path.splitext(os.path.basename(f.filename))[0]
+            if not name:
+                continue
+            await _save_one(bot_app, f, name, tags)
+        return RedirectResponse("/", status_code=303)
+
+    @app.get("/files/{sid}")
+    async def get_file(request: Request, sid: int):
+        if not _logged_in(request):
+            raise HTTPException(status_code=401)
+        async with SessionLocal() as session:
+            snd = (
+                await session.execute(select(Sound).where(Sound.id == sid))
+            ).scalar_one_or_none()
+        if not snd or not snd.storage_path or not os.path.exists(snd.storage_path):
+            raise HTTPException(status_code=404)
+        return FileResponse(
+            snd.storage_path,
+            media_type=snd.mime_type or "application/octet-stream",
+        )
 
     @app.post("/sounds/{sid}/edit")
     async def edit_sound(

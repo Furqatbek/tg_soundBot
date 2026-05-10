@@ -9,7 +9,7 @@
 </div>
 
 <div class="card">
-  <h3>Upload</h3>
+  <h3>Upload one</h3>
   <form method="post" action="/sounds" enctype="multipart/form-data">
     <input type="text" name="name" placeholder="name (e.g. bruh)" required />
     <input type="text" name="tags" placeholder="tags, comma separated" />
@@ -18,7 +18,19 @@
   </form>
   <p class="muted">
     .ogg/.opus &rarr; voice message. Other audio &rarr; audio. Anything else &rarr; document.
-    File is forwarded to your Telegram DM with the bot to capture its <code>file_id</code>.
+  </p>
+</div>
+
+<div class="card">
+  <h3>Bulk upload</h3>
+  <form method="post" action="/sounds/bulk" enctype="multipart/form-data">
+    <input type="text" name="tags" placeholder="tags applied to all (optional)" />
+    <input type="file" name="files" accept="audio/*,video/*,application/octet-stream" multiple required />
+    <button type="submit">Upload all</button>
+  </form>
+  <p class="muted">
+    Each file's name (without extension) becomes the sound name. The tags
+    field above is applied to every uploaded file.
   </p>
 </div>
 
@@ -33,11 +45,18 @@
 {% else %}
 <table>
   <thead>
-    <tr><th>Name</th><th>Tags</th><th>Kind</th><th></th></tr>
+    <tr><th>Preview</th><th>Name</th><th>Tags</th><th>Kind</th><th>Plays</th><th></th></tr>
   </thead>
   <tbody>
   {% for s in sounds %}
     <tr>
+      <td>
+        {% if s.storage_path %}
+          <audio controls preload="none" src="/files/{{ s.id }}" style="max-width:220px"></audio>
+        {% else %}
+          <span class="muted">n/a</span>
+        {% endif %}
+      </td>
       <td>
         <form method="post" action="/sounds/{{ s.id }}/edit" class="row-actions">
           <input type="text" name="name" value="{{ s.name }}" required />
@@ -46,6 +65,7 @@
           <input type="text" name="tags" value="{{ s.tags }}" />
       </td>
       <td>{{ s.kind }}</td>
+      <td>{{ s.play_count }}</td>
       <td>
           <button type="submit">Save</button>
         </form>

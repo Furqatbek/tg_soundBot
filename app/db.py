@@ -13,3 +13,10 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Lightweight upgrades for older databases.
+        try:
+            await conn.exec_driver_sql(
+                "ALTER TABLE sounds ADD COLUMN play_count INTEGER NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass

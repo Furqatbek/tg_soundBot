@@ -237,3 +237,145 @@ def test_delete_missing_disk_file_is_tolerated(client, upload_dir):
 
     r = client.post(f"/sounds/{sid}/delete", follow_redirects=False)
     assert r.status_code == 303  # no 500
+
+
+# ---------------------------------------------------------------------------
+# Bulk upload
+# ---------------------------------------------------------------------------
+
+
+def test_bulk_upload_creates_one_row_per_file(client, fake_bot_app):
+    login(client)
+    files = [
+        ("files", ("first.ogg", b"OGG1", "audio/ogg")),
+        ("files", ("second.bin", b"BIN", "application/octet-stream")),
+    ]
+    r = client.post(
+        "/sounds/bulk",
+        data={"tags": "shared"},
+        files=files,
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+
+    body = client.get("/").text
+    assert "first" in body
+    assert "second" in body
+    assert "shared" in body
+    # One voice + one document call
+    kinds = [c[0] for c in fake_bot_app.bot.calls]
+    assert "voice" in kinds
+    assert "document" in kinds
+
+
+def test_bulk_upload_requires_login(client):
+    r = client.post(
+        "/sounds/bulk",
+        data={"tags": ""},
+        files=[("files", ("x.mp3", b"X", "audio/mpeg"))],
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert "/login" in r.headers["location"]
+
+
+# ---------------------------------------------------------------------------
+# Audio preview / file streaming
+# ---------------------------------------------------------------------------
+
+
+def test_files_route_serves_uploaded_bytes(client):
+    login(client)
+    payload = b"PLAYABLE_BYTES_XYZ"
+    client.post(
+        "/sounds",
+        data={"name": "p", "tags": ""},
+        files={"file": ("p.mp3", payload, "audio/mpeg")},
+    )
+    [sid] = _ids_from_html(client.get("/").text)
+
+    r = client.get(f"/files/{sid}")
+    assert r.status_code == 200
+    assert r.content == payload
+    assert r.headers["content-type"].startswith("audio/")
+
+
+def test_files_route_requires_login(client):
+    # Create a sound while authed, then log out and try.
+    login(client)
+    client.post(
+        "/sounds",
+        data={"name": "p", "tags": ""},
+        files={"file": ("p.mp3", b"X", "audio/mpeg")},
+    )
+    [sid] = _ids_from_html(client.get("/").text)
+    client.post("/logout")
+
+    r = client.get(f"/files/{sid}")
+    assert r.status_code == 401
+
+
+def test_files_route_404_for_missing_id(client):
+    login(client)
+    r = client.get("/files/9999")
+    assert r.status_code == 404
+
+
+def test_files_route_404_when_disk_file_missing(client, upload_dir):
+    login(client)
+    client.post(
+        "/sounds",
+        data={"name": "p", "tags": ""},
+        files={"file": ("p.mp3", b"X", "audio/mpeg")},
+    )
+    [sid] = _ids_from_html(client.get("/").text)
+    os.remove(os.path.join(upload_dir, "aunique.mp3"))
+
+    r = client.get(f"/files/{sid}")
+    assert r.status_code == 404
+
+
+def test_index_renders_audio_preview_link(client):
+    login(client)
+    client.post(
+        "/sounds",
+        data={"name": "withpreview", "tags": ""},
+        files={"file": ("a.mp3", b"X", "audio/mpeg")},
+    )
+    [sid] = _ids_from_html(client.get("/").text)
+    body = client.get("/").text
+    assert f'src="/files/{sid}"' in body
+    assert "<audio" in body
+    assert "Plays" in body  # column header from the redesigned table
+
+
+# ---------------------------------------------------------------------------
+# Popularity sort in the listing
+# ---------------------------------------------------------------------------
+
+
+def test_index_orders_by_plays_then_recency(client):
+    login(client)
+    client.post(
+        "/sounds",
+        data={"name": "first", "tags": ""},
+        files={"file": ("a.mp3", b"X", "audio/mpeg")},
+    )
+    client.post(
+        "/sounds",
+        data={"name": "second", "tags": ""},
+        files={"file": ("b.mp3", b"X", "audio/mpeg")},
+    )
+    # Bump play_count on the older row directly.
+    import sqlite3
+
+    db_path = os.environ["DATABASE_URL"].split("///")[-1]
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("UPDATE sounds SET play_count = 10 WHERE name = 'first'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    body = client.get("/").text
+    assert body.index("first") < body.index("second")
