@@ -471,6 +471,113 @@ def test_edit_can_assign_pack(client):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Stats dashboard
+# ---------------------------------------------------------------------------
+
+
+def _seed_user_and_event(sound_id: int, user_id: int = 42) -> None:
+    """Insert a User row and a PlayEvent referencing the given sound."""
+    import sqlite3
+
+    db_path = os.environ["DATABASE_URL"].split("///")[-1]
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO users (telegram_id, username, first_name) "
+            "VALUES (?, ?, ?)",
+            (user_id, f"u{user_id}", f"User{user_id}"),
+        )
+        conn.execute(
+            "INSERT INTO play_events (sound_id, user_id) VALUES (?, ?)",
+            (sound_id, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_stats_requires_login(client):
+    r = client.get("/stats", follow_redirects=False)
+    assert r.status_code == 303
+    assert "/login" in r.headers["location"]
+
+
+def test_stats_renders_with_data(client):
+    login(client)
+    client.post(
+        "/sounds",
+        data={"name": "popular", "tags": ""},
+        files={"file": ("a.mp3", b"X", "audio/mpeg")},
+    )
+    [sid] = _ids_from_html(client.get("/").text)
+    _seed_user_and_event(sid, user_id=42)
+    _seed_user_and_event(sid, user_id=42)
+
+    body = client.get("/stats").text
+    assert "Top sounds" in body
+    assert "popular" in body
+    assert "Top users" in body
+    assert "@u42" in body
+    assert "chart-timeline" in body
+    assert "Total: 2" in body
+
+
+# ---------------------------------------------------------------------------
+# Users dashboard + broadcast
+# ---------------------------------------------------------------------------
+
+
+def test_users_page_lists_users(client):
+    login(client)
+    _seed_user_and_event(sound_id=0, user_id=1001)  # sound_id is FK but unchecked here
+    body = client.get("/users").text
+    assert "@u1001" in body
+    assert "Send" in body  # action button
+
+
+def test_per_user_message_calls_send_message(client, fake_bot_app):
+    login(client)
+    _seed_user_and_event(sound_id=0, user_id=1001)
+
+    r = client.post(
+        "/users/1001/message",
+        data={"text": "hello there"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    sends = [c for c in fake_bot_app.bot.calls if c[0] == "send_message"]
+    assert sends == [("send_message", 1001, "hello there")]
+
+
+def test_broadcast_sends_to_all_users(client, fake_bot_app):
+    login(client)
+    _seed_user_and_event(sound_id=0, user_id=1)
+    _seed_user_and_event(sound_id=0, user_id=2)
+    _seed_user_and_event(sound_id=0, user_id=3)
+
+    r = client.post(
+        "/users/broadcast",
+        data={"text": "new pack dropped"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+
+    sends = [c for c in fake_bot_app.bot.calls if c[0] == "send_message"]
+    assert sorted(c[1] for c in sends) == [1, 2, 3]
+    assert all(c[2] == "new pack dropped" for c in sends)
+
+
+def test_broadcast_requires_login(client):
+    r = client.post(
+        "/users/broadcast",
+        data={"text": "spam"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert "/login" in r.headers["location"]
+
+
 def test_search_uses_fts_prefix_match(client):
     login(client)
     client.post(

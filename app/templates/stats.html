@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% set active = 'stats' %}
+{% block title %}Stats - Sound Bot{% endblock %}
+{% block body %}
+<div class="topbar">
+  <h1>Stats</h1>
+  <form method="post" action="/logout"><button type="submit">Logout</button></form>
+</div>
+
+<div class="card">
+  <h3>Plays in the last 30 days</h3>
+  <p class="muted">Total: {{ total_plays_30d }}</p>
+  <canvas id="chart-timeline" height="80"></canvas>
+</div>
+
+<div class="card">
+  <h3>Top sounds</h3>
+  {% if not top_sounds %}
+    <p class="muted">No plays recorded yet.</p>
+  {% else %}
+  <table>
+    <thead><tr><th>#</th><th>Name</th><th>Plays</th><th>Pack</th></tr></thead>
+    <tbody>
+    {% for s in top_sounds %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ s.name }}</td>
+        <td>{{ s.play_count }}</td>
+        <td>{{ s.pack.name if s.pack else '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Top users</h3>
+  <p class="muted">By number of inline picks. (Note: Telegram does not expose
+    which chat received an inline result, so we can't show "top chats".)</p>
+  {% if not top_users %}
+    <p class="muted">No users tracked yet.</p>
+  {% else %}
+  <table>
+    <thead><tr><th>#</th><th>User</th><th>Plays</th></tr></thead>
+    <tbody>
+    {% for u in top_users %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>
+          {% if u.username %}@{{ u.username }}{% else %}{{ u.first_name or '(no name)' }}{% endif %}
+          <span class="muted">#{{ u.telegram_id }}</span>
+        </td>
+        <td>{{ u.plays }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+  const TL = {{ timeline | tojson }};
+  new Chart(document.getElementById('chart-timeline').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: TL.map(p => p[0]),
+      datasets: [{
+        label: 'Plays per day',
+        data: TL.map(p => p[1]),
+      }],
+    },
+    options: {
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+      plugins: { legend: { display: false } },
+    },
+  });
+</script>
+{% endblock %}

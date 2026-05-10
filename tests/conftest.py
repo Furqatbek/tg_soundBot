@@ -64,8 +64,10 @@ def _reset_state():
     with eng.begin() as conn:
         for ddl in FTS_SETUP:
             conn.exec_driver_sql(ddl)
+        conn.exec_driver_sql("DELETE FROM play_events")
         conn.exec_driver_sql("DELETE FROM sounds")
         conn.exec_driver_sql("DELETE FROM packs")
+        conn.exec_driver_sql("DELETE FROM users")
     eng.dispose()
 
     shutil.rmtree(_UPLOAD_DIR, ignore_errors=True)
@@ -133,6 +135,9 @@ class FakeBot:
 
     async def set_my_commands(self, commands):
         self.calls.append(("set_my_commands", [c.command for c in commands]))
+
+    async def send_message(self, chat_id, text, **_):
+        self.calls.append(("send_message", chat_id, text))
 
 
 class FakeApp:

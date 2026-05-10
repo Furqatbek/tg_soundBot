@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -12,6 +12,25 @@ class Pack(Base):
     name = Column(String(100), nullable=False)
     slug = Column(String(50), nullable=False, unique=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    telegram_id = Column(BigInteger, primary_key=True)
+    username = Column(String(64))
+    first_name = Column(String(120))
+    last_seen = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class PlayEvent(Base):
+    __tablename__ = "play_events"
+
+    id = Column(Integer, primary_key=True)
+    sound_id = Column(Integer, ForeignKey("sounds.id"), nullable=False, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.telegram_id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class Sound(Base):

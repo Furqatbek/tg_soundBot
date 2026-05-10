@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% set active = 'users' %}
+{% block title %}Users - Sound Bot{% endblock %}
+{% block body %}
+<div class="topbar">
+  <h1>Users</h1>
+  <form method="post" action="/logout"><button type="submit">Logout</button></form>
+</div>
+
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
+<div class="warn">
+  <strong>Use broadcasts responsibly.</strong> Telegram bans bots that send
+  unsolicited promotional messages to users. Prefer announcements directly
+  related to this bot (new packs, downtime, etc.). Users who report your
+  bot for spam can get it banned permanently.
+</div>
+
+<div class="card">
+  <h3>Broadcast announcement</h3>
+  <form method="post" action="/users/broadcast"
+        onsubmit="return confirm('Send this message to ALL {{ users|length }} users?')">
+    <textarea name="text" rows="3" placeholder="message to send to every known user" required
+              style="width:100%; box-sizing:border-box;"></textarea>
+    <button type="submit">Send to all</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Known users ({{ users|length }})</h3>
+  {% if not users %}
+    <p class="muted">No users yet. Users appear here once they message the bot or use it inline.</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr><th>User</th><th>Plays</th><th>Last seen</th><th>Send message</th></tr>
+    </thead>
+    <tbody>
+    {% for u in users %}
+      <tr>
+        <td>
+          {% if u.username %}@{{ u.username }}{% else %}{{ u.first_name or '(no name)' }}{% endif %}
+          <div class="muted">#{{ u.telegram_id }}</div>
+        </td>
+        <td>{{ u.plays }}</td>
+        <td class="muted">{{ u.last_seen }}</td>
+        <td>
+          <form method="post" action="/users/{{ u.telegram_id }}/message" class="row-actions">
+            <input type="text" name="text" placeholder="message..." required style="min-width:14rem" />
+            <button type="submit">Send</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

@@ -14,7 +14,7 @@ from telegram import (
 
 from app import bot as bot_module
 from app.db import SessionLocal
-from app.models import Sound
+from app.models import PlayEvent, Sound, User
 from tests.conftest import FakeBot
 
 
@@ -25,12 +25,16 @@ async def _seed(*sounds: Sound) -> None:
         await session.commit()
 
 
-def _make_inline_update(query: str):
+def _make_inline_update(query: str, user_id: int = 12345):
     inline_query = MagicMock()
     inline_query.query = query
     inline_query.answer = AsyncMock()
     update = MagicMock()
     update.inline_query = inline_query
+    update.effective_user = MagicMock()
+    update.effective_user.id = user_id
+    update.effective_user.username = "alice"
+    update.effective_user.first_name = "Alice"
     return update, inline_query
 
 
@@ -272,6 +276,20 @@ async def test_document_uses_tags_as_description():
     assert doc.description == "meme, fail"
 
 
+def _chosen_update(result_id: str, user_id: int = 555):
+    chosen = MagicMock()
+    chosen.result_id = result_id
+    chosen.from_user = MagicMock()
+    chosen.from_user.id = user_id
+    update = MagicMock()
+    update.chosen_inline_result = chosen
+    update.effective_user = MagicMock()
+    update.effective_user.id = user_id
+    update.effective_user.username = "u"
+    update.effective_user.first_name = "U"
+    return update
+
+
 async def test_chosen_inline_result_bumps_play_count():
     await _seed(
         Sound(name="x", tags="", file_id="f1", file_unique_id="u1", kind="audio"),
@@ -279,11 +297,7 @@ async def test_chosen_inline_result_bumps_play_count():
     rows = await _all_sounds()
     sid = rows[0].id
 
-    chosen = MagicMock()
-    chosen.result_id = str(sid)
-    update = MagicMock()
-    update.chosen_inline_result = chosen
-
+    update = _chosen_update(str(sid))
     await bot_module.handle_chosen(update, MagicMock())
     await bot_module.handle_chosen(update, MagicMock())
 
@@ -295,11 +309,7 @@ async def test_chosen_inline_result_ignores_non_numeric_id():
     await _seed(
         Sound(name="x", tags="", file_id="f1", file_unique_id="u1", kind="audio"),
     )
-    chosen = MagicMock()
-    chosen.result_id = "not-a-number"
-    update = MagicMock()
-    update.chosen_inline_result = chosen
-
+    update = _chosen_update("not-a-number")
     await bot_module.handle_chosen(update, MagicMock())  # should not raise
 
     rows = await _all_sounds()
@@ -318,13 +328,17 @@ def _ctx_with_fake_bot() -> tuple[MagicMock, FakeBot]:
     return ctx, bot
 
 
-def _command_update(chat_id: int = 555):
+def _command_update(chat_id: int = 555, user_id: int = 67890):
     msg = MagicMock()
     msg.reply_text = AsyncMock()
     update = MagicMock()
     update.message = msg
     update.effective_chat = MagicMock()
     update.effective_chat.id = chat_id
+    update.effective_user = MagicMock()
+    update.effective_user.id = user_id
+    update.effective_user.username = "bob"
+    update.effective_user.first_name = "Bob"
     return update, msg
 
 
@@ -460,3 +474,67 @@ async def test_post_init_calls_set_my_commands():
     cmd_calls = [c for c in bot.calls if c[0] == "set_my_commands"]
     assert len(cmd_calls) == 1
     assert set(cmd_calls[0][1]) == {"help", "random", "list"}
+
+
+# ---------------------------------------------------------------------------
+# User tracking and PlayEvent log
+# ---------------------------------------------------------------------------
+
+
+async def _all_users():
+    async with SessionLocal() as session:
+        return (await session.execute(select(User))).scalars().all()
+
+
+async def _all_events():
+    async with SessionLocal() as session:
+        return (await session.execute(select(PlayEvent))).scalars().all()
+
+
+async def test_inline_query_upserts_user():
+    update, _ = _make_inline_update("hello", user_id=42)
+    await bot_module.handle_inline(update, MagicMock())
+
+    users = await _all_users()
+    assert len(users) == 1
+    assert users[0].telegram_id == 42
+    assert users[0].username == "alice"
+
+
+async def test_touch_user_updates_existing_row():
+    update1, _ = _make_inline_update("a", user_id=42)
+    await bot_module.handle_inline(update1, MagicMock())
+    # Same user, second hit -> still one row
+    update2, _ = _make_inline_update("b", user_id=42)
+    await bot_module.handle_inline(update2, MagicMock())
+
+    users = await _all_users()
+    assert len(users) == 1
+
+
+async def test_chosen_inline_result_writes_play_event():
+    await _seed(
+        Sound(name="x", tags="", file_id="f1", file_unique_id="u1", kind="audio"),
+    )
+    rows = await _all_sounds()
+    sid = rows[0].id
+
+    update = _chosen_update(str(sid), user_id=777)
+    await bot_module.handle_chosen(update, MagicMock())
+
+    events = await _all_events()
+    assert len(events) == 1
+    assert events[0].sound_id == sid
+    assert events[0].user_id == 777
+
+
+async def test_cmd_random_tracks_user():
+    await _seed(
+        Sound(name="only", tags="", file_id="f1", file_unique_id="u1", kind="audio"),
+    )
+    ctx, _ = _ctx_with_fake_bot()
+    update, _ = _command_update(user_id=909)
+    await bot_module.cmd_random(update, ctx)
+
+    users = await _all_users()
+    assert any(u.telegram_id == 909 for u in users)

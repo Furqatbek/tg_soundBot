@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import io
+import logging
 import mimetypes
 import os
 import re
 from contextlib import asynccontextmanager
+from datetime import date, timedelta
 from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import select, text
 from starlette.middleware.sessions import SessionMiddleware
 
 from .config import (
@@ -21,8 +24,10 @@ from .config import (
     UPLOAD_DIR,
 )
 from .db import SessionLocal, init_db
-from .models import Pack, Sound
+from .models import Pack, Sound, User
 from .search import search_sounds
+
+log = logging.getLogger(__name__)
 
 TEMPLATES = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 
@@ -287,6 +292,138 @@ def create_app(bot_app) -> FastAPI:
                 snd.pack_id = _coerce_pack_id(pack_id)
                 await session.commit()
         return RedirectResponse("/", status_code=303)
+
+    # ------------------------------------------------------------------
+    # Stats dashboard
+    # ------------------------------------------------------------------
+
+    @app.get("/stats", response_class=HTMLResponse)
+    async def stats_page(request: Request):
+        if not _logged_in(request):
+            return _redirect_login()
+
+        async with SessionLocal() as session:
+            top_sounds = (
+                await session.execute(
+                    select(Sound)
+                    .order_by(Sound.play_count.desc())
+                    .limit(10)
+                )
+            ).scalars().all()
+
+            top_users_rows = (
+                await session.execute(
+                    text(
+                        "SELECT u.telegram_id, u.username, u.first_name, "
+                        "COUNT(*) AS plays "
+                        "FROM play_events pe "
+                        "JOIN users u ON pe.user_id = u.telegram_id "
+                        "GROUP BY u.telegram_id "
+                        "ORDER BY plays DESC LIMIT 10"
+                    )
+                )
+            ).mappings().all()
+            top_users = [dict(r) for r in top_users_rows]
+
+            per_day_rows = (
+                await session.execute(
+                    text(
+                        "SELECT DATE(created_at) AS day, COUNT(*) AS n "
+                        "FROM play_events "
+                        "WHERE created_at >= datetime('now', '-29 days') "
+                        "GROUP BY DATE(created_at)"
+                    )
+                )
+            ).mappings().all()
+            day_counts = {r["day"]: r["n"] for r in per_day_rows}
+
+        today = date.today()
+        timeline = []
+        for i in range(30):
+            d = today - timedelta(days=29 - i)
+            timeline.append((d.isoformat(), int(day_counts.get(d.isoformat(), 0))))
+
+        total_plays = sum(n for _, n in timeline)
+
+        return TEMPLATES.TemplateResponse(
+            request,
+            "stats.html",
+            {
+                "top_sounds": top_sounds,
+                "top_users": top_users,
+                "timeline": timeline,
+                "total_plays_30d": total_plays,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # User dashboard + announcements
+    # ------------------------------------------------------------------
+
+    @app.get("/users", response_class=HTMLResponse)
+    async def users_page(request: Request):
+        if not _logged_in(request):
+            return _redirect_login()
+        async with SessionLocal() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT u.telegram_id, u.username, u.first_name, "
+                        "u.last_seen, COALESCE(p.cnt, 0) AS plays "
+                        "FROM users u "
+                        "LEFT JOIN ("
+                        "  SELECT user_id, COUNT(*) AS cnt "
+                        "  FROM play_events GROUP BY user_id"
+                        ") p ON p.user_id = u.telegram_id "
+                        "ORDER BY u.last_seen DESC"
+                    )
+                )
+            ).mappings().all()
+        users = [dict(r) for r in rows]
+        flash = request.session.pop("flash", None)
+        return TEMPLATES.TemplateResponse(
+            request, "users.html", {"users": users, "flash": flash}
+        )
+
+    @app.post("/users/{tid}/message")
+    async def message_user(
+        request: Request, tid: int, text_body: str = Form(..., alias="text")
+    ):
+        if not _logged_in(request):
+            return _redirect_login()
+        try:
+            await bot_app.bot.send_message(tid, text_body)
+            request.session["flash"] = f"Sent to {tid}."
+        except Exception as exc:
+            log.warning("send_message to %s failed: %s", tid, exc)
+            request.session["flash"] = f"Failed to send to {tid}: {exc}"
+        return RedirectResponse("/users", status_code=303)
+
+    @app.post("/users/broadcast")
+    async def broadcast(request: Request, text_body: str = Form(..., alias="text")):
+        if not _logged_in(request):
+            return _redirect_login()
+        async with SessionLocal() as session:
+            users = (
+                await session.execute(select(User.telegram_id))
+            ).scalars().all()
+
+        sent = 0
+        failed = 0
+        for tid in users:
+            try:
+                await bot_app.bot.send_message(tid, text_body)
+                sent += 1
+            except Exception as exc:
+                log.warning("broadcast to %s failed: %s", tid, exc)
+                failed += 1
+            # Telegram's per-bot send rate is ~30 msg/s. Stay below that.
+            await asyncio.sleep(0.05)
+
+        request.session["flash"] = (
+            f"Broadcast: {sent} delivered, {failed} failed (out of {len(users)})."
+        )
+        return RedirectResponse("/users", status_code=303)
 
     @app.post("/sounds/{sid}/delete")
     async def delete_sound(request: Request, sid: int):

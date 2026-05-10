@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+from datetime import datetime, timezone
+
 from sqlalchemy import func, select, update as sql_update
 from telegram import (
     BotCommand,
@@ -22,7 +24,7 @@ from telegram.ext import (
 
 from .config import ADMIN_CHAT_ID, BOT_TOKEN
 from .db import SessionLocal
-from .models import Pack, Sound
+from .models import Pack, PlayEvent, Sound, User
 from .search import parse_query, search_sounds
 
 log = logging.getLogger(__name__)
@@ -35,12 +37,39 @@ PUBLIC_COMMANDS = [
 ]
 
 
+async def _touch_user(update: Update) -> None:
+    """Upsert the calling user so we can list/contact them later."""
+    u = update.effective_user
+    if not u:
+        return
+    now = datetime.now(timezone.utc)
+    async with SessionLocal() as session:
+        existing = (
+            await session.execute(select(User).where(User.telegram_id == u.id))
+        ).scalar_one_or_none()
+        if existing:
+            existing.username = u.username
+            existing.first_name = u.first_name
+            existing.last_seen = now
+        else:
+            session.add(
+                User(
+                    telegram_id=u.id,
+                    username=u.username,
+                    first_name=u.first_name,
+                    last_seen=now,
+                )
+            )
+        await session.commit()
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _touch_user(update)
     me = await context.bot.get_me()
     if update.effective_user and update.effective_user.id == ADMIN_CHAT_ID:
         await update.message.reply_text(
@@ -57,6 +86,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _touch_user(update)
     me = await context.bot.get_me()
     await update.message.reply_text(
         f"Inline search: type @{me.username} <query> in any chat.\n\n"
@@ -68,6 +98,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_random(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _touch_user(update)
     async with SessionLocal() as session:
         snd = (
             await session.execute(select(Sound).order_by(func.random()).limit(1))
@@ -85,6 +116,7 @@ async def cmd_random(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _touch_user(update)
     async with SessionLocal() as session:
         rows = (
             await session.execute(
@@ -129,6 +161,7 @@ def _build_result(snd: Sound):
 
 
 async def handle_inline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _touch_user(update)
     raw = update.inline_query.query or ""
     pack_slug, text_query = parse_query(raw)
 
@@ -151,7 +184,8 @@ async def handle_inline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def handle_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Bump play_count when a user picks one of our inline results."""
+    """Bump play_count + log a PlayEvent when a user picks an inline result."""
+    await _touch_user(update)
     chosen = update.chosen_inline_result
     if not chosen:
         return
@@ -159,12 +193,14 @@ async def handle_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         sid = int(chosen.result_id)
     except (TypeError, ValueError):
         return
+    user_id = chosen.from_user.id if chosen.from_user else None
     async with SessionLocal() as session:
         await session.execute(
             sql_update(Sound)
             .where(Sound.id == sid)
             .values(play_count=Sound.play_count + 1)
         )
+        session.add(PlayEvent(sound_id=sid, user_id=user_id))
         await session.commit()
 
 

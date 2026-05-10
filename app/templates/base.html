@@ -23,9 +23,21 @@
   .topbar { display: flex; justify-content: space-between; align-items: baseline; }
   .error { color: #c22; }
   .card { padding: 1rem; border: 1px solid #8883; border-radius: 8px; margin-bottom: 1rem; }
+  nav.app-nav { margin-bottom: 1rem; display: flex; gap: 1rem; align-items: center; }
+  nav.app-nav a { text-decoration: none; padding: .25rem .5rem; border-radius: 6px; }
+  nav.app-nav a.active { background: #8884; }
+  .flash { padding: .5rem .75rem; margin-bottom: 1rem; border-radius: 6px; background: #2d83; }
+  .warn { padding: .5rem .75rem; border-radius: 6px; background: #c8242233; border:1px solid #c83; margin-bottom: 1rem; }
 </style>
 </head>
 <body>
+{% if request and request.session and request.session.get('user') %}
+<nav class="app-nav">
+  <a href="/" {% if active == 'sounds' %}class="active"{% endif %}>Sounds</a>
+  <a href="/stats" {% if active == 'stats' %}class="active"{% endif %}>Stats</a>
+  <a href="/users" {% if active == 'users' %}class="active"{% endif %}>Users</a>
+</nav>
+{% endif %}
 {% block body %}{% endblock %}
 </body>
 </html>
