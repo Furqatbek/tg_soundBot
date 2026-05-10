@@ -15,4 +15,5 @@ class Sound(Base):
     kind = Column(String(20), nullable=False)  # voice | audio | document
     mime_type = Column(String(120))
     duration = Column(Integer)
+    storage_path = Column(String(500))
     created_at = Column(DateTime(timezone=True), server_default=func.now())

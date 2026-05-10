@@ -64,6 +64,11 @@ Telegram chat type `@your_bot <query>` and pick a result.
   (`InlineQueryResultCachedAudio`).
 - Anything else is sent as a document.
 
+The raw bytes are also saved to `UPLOAD_DIR` (default `./uploads`,
+`/data/uploads` in Docker) as `<file_unique_id><ext>`, so you keep a
+local backup independent of Telegram. Deleting from the panel removes
+both the DB row and the file on disk.
+
 You can also add sounds without the web UI: just send the bot a voice,
 audio, or document file from your admin account with a caption like:
 
@@ -83,6 +88,7 @@ The first part is the name, the rest after `|` are comma-separated tags.
 | `ADMIN_PASSWORD` | yes | Web panel password |
 | `SESSION_SECRET` | recommended | Cookie signing key |
 | `DATABASE_URL` | no | Defaults to `sqlite+aiosqlite:///./sounds.db` |
+| `UPLOAD_DIR` | no | Where raw uploaded files are saved. Default `./uploads`, `/data/uploads` in Docker |
 | `PORT` | no | Web panel port (default 8000) |
 
 ## Layout

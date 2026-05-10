@@ -14,6 +14,7 @@ COPY app ./app
 
 RUN mkdir -p /data
 ENV DATABASE_URL=sqlite+aiosqlite:////data/sounds.db \
+    UPLOAD_DIR=/data/uploads \
     PORT=8000
 
 EXPOSE 8000

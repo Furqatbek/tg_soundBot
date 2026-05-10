@@ -16,6 +16,7 @@ from .config import (
     ADMIN_PASSWORD,
     ADMIN_USERNAME,
     SESSION_SECRET,
+    UPLOAD_DIR,
 )
 from .db import SessionLocal, init_db
 from .models import Sound
@@ -34,6 +35,7 @@ def _redirect_login() -> RedirectResponse:
 def create_app(bot_app) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
         await init_db()
         yield
 
@@ -114,6 +116,10 @@ def create_app(bot_app) -> FastAPI:
             sent = await bot.send_document(ADMIN_CHAT_ID, document=bio, caption=marker)
             kind, obj = "document", sent.document
 
+        storage_path = os.path.join(UPLOAD_DIR, f"{obj.file_unique_id}{ext}")
+        with open(storage_path, "wb") as fh:
+            fh.write(data)
+
         async with SessionLocal() as session:
             session.add(
                 Sound(
@@ -124,6 +130,7 @@ def create_app(bot_app) -> FastAPI:
                     kind=kind,
                     mime_type=getattr(obj, "mime_type", mime),
                     duration=getattr(obj, "duration", None),
+                    storage_path=storage_path,
                 )
             )
             await session.commit()
@@ -154,8 +161,17 @@ def create_app(bot_app) -> FastAPI:
         if not _logged_in(request):
             return _redirect_login()
         async with SessionLocal() as session:
-            await session.execute(delete(Sound).where(Sound.id == sid))
-            await session.commit()
+            snd = (
+                await session.execute(select(Sound).where(Sound.id == sid))
+            ).scalar_one_or_none()
+            if snd:
+                if snd.storage_path:
+                    try:
+                        os.remove(snd.storage_path)
+                    except FileNotFoundError:
+                        pass
+                await session.delete(snd)
+                await session.commit()
         return RedirectResponse("/", status_code=303)
 
     return app
