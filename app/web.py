@@ -44,7 +44,7 @@ def create_app(bot_app) -> FastAPI:
 
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request):
-        return TEMPLATES.TemplateResponse("login.html", {"request": request, "error": None})
+        return TEMPLATES.TemplateResponse(request, "login.html", {"error": None})
 
     @app.post("/login")
     async def login(
@@ -56,8 +56,9 @@ def create_app(bot_app) -> FastAPI:
             request.session["user"] = username
             return RedirectResponse("/", status_code=303)
         return TEMPLATES.TemplateResponse(
+            request,
             "login.html",
-            {"request": request, "error": "Invalid credentials"},
+            {"error": "Invalid credentials"},
             status_code=401,
         )
 
@@ -80,8 +81,9 @@ def create_app(bot_app) -> FastAPI:
                 )
             sounds = (await session.execute(stmt)).scalars().all()
         return TEMPLATES.TemplateResponse(
+            request,
             "index.html",
-            {"request": request, "sounds": sounds, "q": q},
+            {"sounds": sounds, "q": q},
         )
 
     @app.post("/sounds")

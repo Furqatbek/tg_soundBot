@@ -91,6 +91,17 @@ The first part is the name, the rest after `|` are comma-separated tags.
 | `UPLOAD_DIR` | no | Where raw uploaded files are saved. Default `./uploads`, `/data/uploads` in Docker |
 | `PORT` | no | Web panel port (default 8000) |
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+`tests/test_bot.py` covers the inline search and admin upload handlers
+with a temp SQLite DB. `tests/test_web.py` exercises the FastAPI panel
+end-to-end via `TestClient`, with a fake Telegram bot recording calls.
+
 ## Layout
 
 ```
