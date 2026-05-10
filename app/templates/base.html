@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>{% block title %}Sound Bot{% endblock %}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         max-width: 880px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { margin-top: 0; }
+  form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+  input[type=text], input[type=password], input[type=file] { padding: .4rem .6rem; }
+  input[type=text], input[type=password] { min-width: 200px; }
+  button { padding: .45rem .9rem; cursor: pointer; }
+  table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid #8884; vertical-align: top; }
+  .tag { display: inline-block; padding: .1rem .4rem; border-radius: 6px;
+         background: #8883; font-size: .85em; margin-right: .25rem; }
+  .row-actions form { display: inline-flex; gap: .25rem; }
+  .row-actions input { width: 9rem; }
+  .muted { opacity: .65; font-size: .85em; }
+  .topbar { display: flex; justify-content: space-between; align-items: baseline; }
+  .error { color: #c22; }
+  .card { padding: 1rem; border: 1px solid #8883; border-radius: 8px; margin-bottom: 1rem; }
+</style>
+</head>
+<body>
+{% block body %}{% endblock %}
+</body>
+</html>
