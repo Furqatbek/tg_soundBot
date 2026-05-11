@@ -15,7 +15,9 @@ def _required(key: str) -> str:
 BOT_TOKEN = _required("BOT_TOKEN")
 ADMIN_CHAT_ID = int(_required("ADMIN_CHAT_ID"))
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = _required("ADMIN_PASSWORD")
+# Optional: leave unset to fully disable password login (only Telegram
+# Login Widget will work, restricted to ADMIN_CHAT_ID).
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD") or None
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-secret-change-me")
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./sounds.db")
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "./uploads")

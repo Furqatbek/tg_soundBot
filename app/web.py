@@ -11,15 +11,17 @@ from datetime import date, timedelta
 from typing import List, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, text
 from starlette.middleware.sessions import SessionMiddleware
 
+from .auth import verify_telegram_auth
 from .config import (
     ADMIN_CHAT_ID,
     ADMIN_PASSWORD,
     ADMIN_USERNAME,
+    BOT_TOKEN,
     SESSION_SECRET,
     UPLOAD_DIR,
 )
@@ -113,17 +115,32 @@ async def _save_one(
 
 def create_app(bot_app) -> FastAPI:
     @asynccontextmanager
-    async def lifespan(_: FastAPI):
+    async def lifespan(app_: FastAPI):
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         await init_db()
+        # Cache the bot's @username for the Telegram Login Widget.
+        try:
+            me = await bot_app.bot.get_me()
+            app_.state.bot_username = me.username
+        except Exception:
+            app_.state.bot_username = None
         yield
 
     app = FastAPI(lifespan=lifespan)
     app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
+    def _login_context(request: Request, error: str | None = None) -> dict:
+        return {
+            "error": error,
+            "bot_username": getattr(request.app.state, "bot_username", None),
+            "password_login_enabled": ADMIN_PASSWORD is not None,
+        }
+
     @app.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request):
-        return TEMPLATES.TemplateResponse(request, "login.html", {"error": None})
+        return TEMPLATES.TemplateResponse(
+            request, "login.html", _login_context(request)
+        )
 
     @app.post("/login")
     async def login(
@@ -131,14 +148,51 @@ def create_app(bot_app) -> FastAPI:
         username: str = Form(...),
         password: str = Form(...),
     ):
-        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-            request.session["user"] = username
+        if (
+            ADMIN_PASSWORD is not None
+            and username == ADMIN_USERNAME
+            and password == ADMIN_PASSWORD
+        ):
+            request.session["user"] = ADMIN_USERNAME
             return RedirectResponse("/", status_code=303)
         return TEMPLATES.TemplateResponse(
             request,
             "login.html",
-            {"error": "Invalid credentials"},
+            _login_context(request, error="Invalid credentials"),
             status_code=401,
+        )
+
+    @app.get("/auth/telegram")
+    async def auth_telegram(request: Request):
+        params = dict(request.query_params)
+        if not verify_telegram_auth(params, BOT_TOKEN):
+            raise HTTPException(status_code=401, detail="invalid telegram signature")
+        try:
+            tid = int(params.get("id", "0"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="bad id")
+        if tid != ADMIN_CHAT_ID:
+            raise HTTPException(status_code=403, detail="not admin")
+        request.session["user"] = ADMIN_USERNAME
+        return RedirectResponse("/", status_code=303)
+
+    @app.get("/healthz")
+    async def healthz():
+        db_ok = True
+        try:
+            async with SessionLocal() as session:
+                await session.execute(text("SELECT 1"))
+        except Exception:
+            db_ok = False
+        bot_ok = True
+        try:
+            await bot_app.bot.get_me()
+        except Exception:
+            bot_ok = False
+        ok = db_ok and bot_ok
+        return JSONResponse(
+            {"status": "ok" if ok else "degraded", "db": db_ok, "bot": bot_ok},
+            status_code=200 if ok else 503,
         )
 
     @app.post("/logout")

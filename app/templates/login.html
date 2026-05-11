@@ -3,9 +3,37 @@
 {% block body %}
 <h1>Sound Bot - Admin login</h1>
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
-<form method="post" action="/login">
-  <input type="text" name="username" placeholder="username" required autofocus />
-  <input type="password" name="password" placeholder="password" required />
-  <button type="submit">Sign in</button>
-</form>
+
+{% if bot_username %}
+<div class="card">
+  <h3>Sign in with Telegram</h3>
+  <p class="muted">Only the configured admin Telegram account can sign in.</p>
+  <script async
+          src="https://telegram.org/js/telegram-widget.js?22"
+          data-telegram-login="{{ bot_username }}"
+          data-size="large"
+          data-userpic="false"
+          data-auth-url="/auth/telegram"
+          data-request-access="write"></script>
+  <p class="muted" style="margin-top:.75rem">
+    Set the bot's domain in @BotFather (<code>/setdomain</code>) to match
+    where you host this panel — for local testing use <code>localhost</code>.
+  </p>
+</div>
+{% endif %}
+
+{% if password_login_enabled %}
+<div class="card">
+  <h3>Username + password</h3>
+  <form method="post" action="/login">
+    <input type="text" name="username" placeholder="username" required autofocus />
+    <input type="password" name="password" placeholder="password" required />
+    <button type="submit">Sign in</button>
+  </form>
+</div>
+{% endif %}
+
+{% if not bot_username and not password_login_enabled %}
+<p class="error">No login method is configured. Set ADMIN_PASSWORD or wait for the Telegram widget to load (after <code>/setdomain</code> in BotFather).</p>
+{% endif %}
 {% endblock %}

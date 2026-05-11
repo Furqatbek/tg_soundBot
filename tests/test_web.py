@@ -607,6 +607,96 @@ def test_broadcast_requires_login(client):
     assert "/login" in r.headers["location"]
 
 
+# ---------------------------------------------------------------------------
+# Telegram Login Widget callback (/auth/telegram)
+# ---------------------------------------------------------------------------
+
+
+def _telegram_auth_qs(payload: dict, token: str = "test:token") -> dict:
+    import hashlib
+    import hmac
+
+    pairs = sorted(f"{k}={v}" for k, v in payload.items() if k != "hash")
+    string = "\n".join(pairs)
+    secret = hashlib.sha256(token.encode()).digest()
+    payload["hash"] = hmac.new(secret, string.encode(), hashlib.sha256).hexdigest()
+    return payload
+
+
+def test_auth_telegram_admin_signs_in(client):
+    import time
+
+    # ADMIN_CHAT_ID = 111 in the test env
+    qs = _telegram_auth_qs({
+        "id": "111",
+        "first_name": "Admin",
+        "auth_date": str(int(time.time())),
+    })
+    r = client.get("/auth/telegram", params=qs, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+    # Subsequent request must be authed
+    r2 = client.get("/")
+    assert r2.status_code == 200
+    assert "Sounds" in r2.text
+
+
+def test_auth_telegram_rejects_non_admin(client):
+    import time
+
+    qs = _telegram_auth_qs({
+        "id": "999",  # not ADMIN_CHAT_ID
+        "first_name": "Mallory",
+        "auth_date": str(int(time.time())),
+    })
+    r = client.get("/auth/telegram", params=qs, follow_redirects=False)
+    assert r.status_code == 403
+
+
+def test_auth_telegram_rejects_bad_signature(client):
+    import time
+
+    qs = {
+        "id": "111",
+        "first_name": "Admin",
+        "auth_date": str(int(time.time())),
+        "hash": "deadbeef" * 8,
+    }
+    r = client.get("/auth/telegram", params=qs, follow_redirects=False)
+    assert r.status_code == 401
+
+
+def test_login_page_renders_telegram_widget(client):
+    body = client.get("/login").text
+    assert "telegram-widget.js" in body
+    assert 'data-telegram-login="fake_bot"' in body
+
+
+# ---------------------------------------------------------------------------
+# Healthcheck
+# ---------------------------------------------------------------------------
+
+
+def test_healthz_returns_ok(client):
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["db"] is True
+    assert body["bot"] is True
+
+
+def test_healthz_reports_bot_failure(client, fake_bot_app, monkeypatch):
+    async def boom():
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr(fake_bot_app.bot, "get_me", boom)
+    r = client.get("/healthz")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["bot"] is False
+
+
 def test_search_uses_fts_prefix_match(client):
     login(client)
     client.post(

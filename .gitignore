@@ -6,5 +6,6 @@ venv/
 *.db
 *.db-journal
 uploads/
+backups/
 .idea/
 .vscode/
