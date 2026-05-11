@@ -33,6 +33,17 @@ class PlayEvent(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
+class MissedSearch(Base):
+    """Inline queries that returned zero results — content-gap log."""
+
+    __tablename__ = "missed_searches"
+
+    id = Column(Integer, primary_key=True)
+    query = Column(String(255), nullable=False, index=True)
+    user_id = Column(BigInteger, ForeignKey("users.telegram_id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class Sound(Base):
     __tablename__ = "sounds"
 

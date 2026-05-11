@@ -14,7 +14,7 @@ from telegram import (
 
 from app import bot as bot_module
 from app.db import SessionLocal
-from app.models import PlayEvent, Sound, User
+from app.models import MissedSearch, Pack, PlayEvent, Sound, User
 from tests.conftest import FakeBot
 
 
@@ -473,7 +473,7 @@ async def test_post_init_calls_set_my_commands():
 
     cmd_calls = [c for c in bot.calls if c[0] == "set_my_commands"]
     assert len(cmd_calls) == 1
-    assert set(cmd_calls[0][1]) == {"help", "random", "list"}
+    assert set(cmd_calls[0][1]) == {"help", "random", "list", "board"}
 
 
 # ---------------------------------------------------------------------------
@@ -538,3 +538,191 @@ async def test_cmd_random_tracks_user():
 
     users = await _all_users()
     assert any(u.telegram_id == 909 for u in users)
+
+
+# ---------------------------------------------------------------------------
+# No-results telemetry
+# ---------------------------------------------------------------------------
+
+
+async def _all_missed():
+    async with SessionLocal() as session:
+        return (await session.execute(select(MissedSearch))).scalars().all()
+
+
+async def test_inline_zero_result_logs_missed_search():
+    update, _ = _make_inline_update("vuvuzela", user_id=42)
+    await bot_module.handle_inline(update, MagicMock())
+
+    missed = await _all_missed()
+    assert len(missed) == 1
+    assert missed[0].query == "vuvuzela"
+    assert missed[0].user_id == 42
+
+
+async def test_inline_with_results_does_not_log():
+    await _seed(
+        Sound(name="bruh", tags="", file_id="f1", file_unique_id="u1", kind="voice"),
+    )
+    update, _ = _make_inline_update("bruh", user_id=42)
+    await bot_module.handle_inline(update, MagicMock())
+
+    assert await _all_missed() == []
+
+
+async def test_inline_empty_query_does_not_log():
+    update, _ = _make_inline_update("", user_id=42)
+    await bot_module.handle_inline(update, MagicMock())
+    assert await _all_missed() == []
+
+
+async def test_inline_very_short_query_does_not_log():
+    update, _ = _make_inline_update("a", user_id=42)
+    await bot_module.handle_inline(update, MagicMock())
+    assert await _all_missed() == []
+
+
+async def test_inline_unknown_pack_does_not_log():
+    update, _ = _make_inline_update("pack:nope", user_id=42)
+    await bot_module.handle_inline(update, MagicMock())
+    assert await _all_missed() == []
+
+
+# ---------------------------------------------------------------------------
+# /board command and play callback
+# ---------------------------------------------------------------------------
+
+
+def _board_context(args=None):
+    ctx = MagicMock()
+    ctx.bot = FakeBot()
+    ctx.args = args or []
+    return ctx
+
+
+async def test_cmd_board_replies_with_no_sounds_when_empty():
+    update, msg = _command_update()
+    await bot_module.cmd_board(update, _board_context())
+    msg.reply_text.assert_awaited_once()
+    assert "No sounds" in msg.reply_text.await_args.args[0]
+
+
+async def test_cmd_board_posts_keyboard_with_top_sounds():
+    await _seed(
+        Sound(name="alpha", tags="", file_id="f1", file_unique_id="u1", kind="audio", play_count=5),
+        Sound(name="beta", tags="", file_id="f2", file_unique_id="u2", kind="audio", play_count=10),
+        Sound(name="gamma", tags="", file_id="f3", file_unique_id="u3", kind="audio", play_count=1),
+    )
+    update, msg = _command_update()
+    await bot_module.cmd_board(update, _board_context())
+
+    msg.reply_text.assert_awaited_once()
+    kwargs = msg.reply_text.await_args.kwargs
+    markup = kwargs["reply_markup"]
+    flat = [btn for row in markup.inline_keyboard for btn in row]
+    # Order: highest play_count first.
+    assert [b.text for b in flat] == ["beta", "alpha", "gamma"]
+    assert all(b.callback_data.startswith("play:") for b in flat)
+
+
+async def test_cmd_board_pack_filter():
+    async with SessionLocal() as session:
+        horns = Pack(name="Horns", slug="horns")
+        session.add(horns)
+        await session.commit()
+        session.add_all([
+            Sound(name="in", tags="", file_id="f1", file_unique_id="u1",
+                  kind="audio", pack_id=horns.id),
+            Sound(name="out", tags="", file_id="f2", file_unique_id="u2",
+                  kind="audio"),
+        ])
+        await session.commit()
+
+    update, msg = _command_update()
+    await bot_module.cmd_board(update, _board_context(args=["horns"]))
+
+    markup = msg.reply_text.await_args.kwargs["reply_markup"]
+    labels = [btn.text for row in markup.inline_keyboard for btn in row]
+    assert labels == ["in"]
+
+
+async def test_cmd_board_unknown_pack():
+    update, msg = _command_update()
+    await bot_module.cmd_board(update, _board_context(args=["does-not-exist"]))
+    assert "Unknown pack" in msg.reply_text.await_args.args[0]
+
+
+async def test_cmd_board_truncates_long_label():
+    long_name = "x" * 80
+    await _seed(
+        Sound(name=long_name, tags="", file_id="f1", file_unique_id="u1", kind="audio"),
+    )
+    update, msg = _command_update()
+    await bot_module.cmd_board(update, _board_context())
+    markup = msg.reply_text.await_args.kwargs["reply_markup"]
+    label = markup.inline_keyboard[0][0].text
+    assert len(label) <= 28
+    assert label.endswith("…")
+
+
+def _callback_update(callback_data: str, user_id: int = 909, chat_id: int = 5000):
+    cb = MagicMock()
+    cb.data = callback_data
+    cb.from_user = MagicMock()
+    cb.from_user.id = user_id
+    cb.message = MagicMock()
+    cb.message.chat = MagicMock()
+    cb.message.chat.id = chat_id
+    cb.answer = AsyncMock()
+
+    update = MagicMock()
+    update.callback_query = cb
+    update.effective_user = MagicMock()
+    update.effective_user.id = user_id
+    update.effective_user.username = "u"
+    update.effective_user.first_name = "U"
+    return update, cb
+
+
+async def test_play_callback_sends_sound_and_logs():
+    await _seed(
+        Sound(name="snd", tags="", file_id="audfid", file_unique_id="u1", kind="audio"),
+    )
+    sid = (await _all_sounds())[0].id
+
+    ctx, bot = _ctx_with_fake_bot()
+    update, cb = _callback_update(f"play:{sid}", chat_id=7777)
+
+    await bot_module.handle_play_callback(update, ctx)
+
+    audio_sends = [c for c in bot.calls if c[0] == "audio"]
+    assert len(audio_sends) == 1
+    assert audio_sends[0][1] == 7777
+    cb.answer.assert_awaited()
+
+    sounds_after = await _all_sounds()
+    assert sounds_after[0].play_count == 1
+    async with SessionLocal() as session:
+        events = (await session.execute(select(PlayEvent))).scalars().all()
+    assert len(events) == 1
+    assert events[0].sound_id == sid
+    assert events[0].user_id == 909
+
+
+async def test_play_callback_handles_unknown_sound():
+    ctx, bot = _ctx_with_fake_bot()
+    update, cb = _callback_update("play:9999")
+
+    await bot_module.handle_play_callback(update, ctx)
+
+    cb.answer.assert_awaited()
+    # No send_* call.
+    assert bot.calls == []
+
+
+async def test_play_callback_ignores_bad_data():
+    ctx, bot = _ctx_with_fake_bot()
+    update, cb = _callback_update("play:not-a-number")
+    await bot_module.handle_play_callback(update, ctx)
+    cb.answer.assert_awaited()
+    assert bot.calls == []

@@ -523,6 +523,35 @@ def test_stats_renders_with_data(client):
     assert "Total: 2" in body
 
 
+def _seed_missed(query: str, user_id: int = 1, times: int = 1) -> None:
+    import sqlite3
+
+    db_path = os.environ["DATABASE_URL"].split("///")[-1]
+    conn = sqlite3.connect(db_path)
+    try:
+        for _ in range(times):
+            conn.execute(
+                "INSERT INTO missed_searches (query, user_id) VALUES (?, ?)",
+                (query, user_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_stats_shows_missed_searches(client):
+    login(client)
+    _seed_missed("vuvuzela", times=3)
+    _seed_missed("rickroll", times=1)
+
+    body = client.get("/stats").text
+    assert "Content gaps" in body
+    assert "vuvuzela" in body
+    assert "rickroll" in body
+    # vuvuzela (3) ranks before rickroll (1)
+    assert body.index("vuvuzela") < body.index("rickroll")
+
+
 # ---------------------------------------------------------------------------
 # Users dashboard + broadcast
 # ---------------------------------------------------------------------------

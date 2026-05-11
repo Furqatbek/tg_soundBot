@@ -35,6 +35,30 @@
 </div>
 
 <div class="card">
+  <h3>Content gaps</h3>
+  <p class="muted">
+    Inline searches in the last 30 days that returned <strong>no results</strong>.
+    Upload sounds to match what people are looking for.
+  </p>
+  {% if not missed_searches %}
+    <p class="muted">Nothing missed yet.</p>
+  {% else %}
+  <table>
+    <thead><tr><th>Query</th><th>Times</th><th>Last seen</th></tr></thead>
+    <tbody>
+    {% for m in missed_searches %}
+      <tr>
+        <td><code>{{ m.q }}</code></td>
+        <td>{{ m.n }}</td>
+        <td class="muted">{{ m.last_seen }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="card">
   <h3>Top users</h3>
   <p class="muted">By number of inline picks. (Note: Telegram does not expose
     which chat received an inline result, so we can't show "top chats".)</p>

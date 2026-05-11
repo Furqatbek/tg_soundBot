@@ -337,6 +337,20 @@ def create_app(bot_app) -> FastAPI:
             ).mappings().all()
             day_counts = {r["day"]: r["n"] for r in per_day_rows}
 
+            missed_rows = (
+                await session.execute(
+                    text(
+                        "SELECT LOWER(query) AS q, COUNT(*) AS n, "
+                        "MAX(created_at) AS last_seen "
+                        "FROM missed_searches "
+                        "WHERE created_at >= datetime('now', '-29 days') "
+                        "GROUP BY LOWER(query) "
+                        "ORDER BY n DESC LIMIT 15"
+                    )
+                )
+            ).mappings().all()
+            missed_searches = [dict(r) for r in missed_rows]
+
         today = date.today()
         timeline = []
         for i in range(30):
@@ -353,6 +367,7 @@ def create_app(bot_app) -> FastAPI:
                 "top_users": top_users,
                 "timeline": timeline,
                 "total_plays_30d": total_plays,
+                "missed_searches": missed_searches,
             },
         )
 

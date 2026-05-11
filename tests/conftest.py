@@ -66,6 +66,7 @@ def _reset_state():
         for ddl in FTS_SETUP:
             conn.exec_driver_sql(ddl)
         conn.exec_driver_sql("DELETE FROM play_events")
+        conn.exec_driver_sql("DELETE FROM missed_searches")
         conn.exec_driver_sql("DELETE FROM sounds")
         conn.exec_driver_sql("DELETE FROM packs")
         conn.exec_driver_sql("DELETE FROM users")

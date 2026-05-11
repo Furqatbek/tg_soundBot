@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select, update as sql_update
 from telegram import (
     BotCommand,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     InlineQueryResultCachedAudio,
     InlineQueryResultCachedDocument,
     InlineQueryResultCachedVoice,
@@ -14,6 +16,7 @@ from telegram import (
 )
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     ChosenInlineResultHandler,
     CommandHandler,
     ContextTypes,
@@ -24,7 +27,7 @@ from telegram.ext import (
 
 from .config import ADMIN_CHAT_ID, BOT_TOKEN
 from .db import SessionLocal
-from .models import Pack, PlayEvent, Sound, User
+from .models import MissedSearch, Pack, PlayEvent, Sound, User
 from .search import parse_query, search_sounds
 
 log = logging.getLogger(__name__)
@@ -34,7 +37,14 @@ PUBLIC_COMMANDS = [
     BotCommand("help", "How to use this bot"),
     BotCommand("random", "Send a random sound"),
     BotCommand("list", "Show top sounds"),
+    BotCommand("board", "Post a soundboard keyboard"),
 ]
+
+# Inline keyboards have a 64-byte limit per button label; truncate names
+# safely. We layout a 3-wide grid which fits on phone screens.
+_BOARD_ROW_WIDTH = 3
+_BOARD_LIMIT = 12
+_LABEL_MAX = 28
 
 
 async def _touch_user(update: Update) -> None:
@@ -179,6 +189,18 @@ async def handle_inline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         rows = await search_sounds(session, text_query=text_query, pack_id=pack_id)
 
+        # No-results telemetry: log queries that had real text and missed,
+        # so /stats can show what users want but we don't have.
+        if not rows and text_query and len(text_query) >= 2:
+            user = update.effective_user
+            session.add(
+                MissedSearch(
+                    query=text_query,
+                    user_id=user.id if user else None,
+                )
+            )
+            await session.commit()
+
     results = [_build_result(s) for s in rows]
     await update.inline_query.answer(results, cache_time=1, is_personal=False)
 
@@ -202,6 +224,109 @@ async def handle_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         session.add(PlayEvent(sound_id=sid, user_id=user_id))
         await session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Soundboard keyboard (/board)
+# ---------------------------------------------------------------------------
+
+
+def _build_board_keyboard(sounds) -> InlineKeyboardMarkup:
+    rows, current = [], []
+    for s in sounds:
+        label = s.name if len(s.name) <= _LABEL_MAX else s.name[: _LABEL_MAX - 1] + "…"
+        current.append(InlineKeyboardButton(label, callback_data=f"play:{s.id}"))
+        if len(current) == _BOARD_ROW_WIDTH:
+            rows.append(current)
+            current = []
+    if current:
+        rows.append(current)
+    return InlineKeyboardMarkup(rows)
+
+
+async def cmd_board(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _touch_user(update)
+    args = context.args or []
+    pack_slug = args[0].lower() if args else None
+
+    async with SessionLocal() as session:
+        pack = None
+        if pack_slug:
+            pack = (
+                await session.execute(select(Pack).where(Pack.slug == pack_slug))
+            ).scalar_one_or_none()
+            if pack is None:
+                await update.message.reply_text(f"Unknown pack: {pack_slug}")
+                return
+
+        stmt = select(Sound).order_by(
+            Sound.play_count.desc(), Sound.created_at.desc()
+        ).limit(_BOARD_LIMIT)
+        if pack is not None:
+            stmt = stmt.where(Sound.pack_id == pack.id)
+        sounds = (await session.execute(stmt)).scalars().all()
+
+    if not sounds:
+        await update.message.reply_text(
+            f"No sounds in {pack.name} yet." if pack else "No sounds available yet."
+        )
+        return
+
+    title = f"Soundboard - {pack.name}" if pack else "Soundboard"
+    await update.message.reply_text(title, reply_markup=_build_board_keyboard(sounds))
+
+
+async def handle_play_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A user pressed a button on a /board message — send that sound."""
+    await _touch_user(update)
+    cb = update.callback_query
+    if not cb:
+        return
+    data = cb.data or ""
+    if not data.startswith("play:"):
+        await cb.answer()
+        return
+    try:
+        sid = int(data.split(":", 1)[1])
+    except ValueError:
+        await cb.answer()
+        return
+
+    async with SessionLocal() as session:
+        snd = (
+            await session.execute(select(Sound).where(Sound.id == sid))
+        ).scalar_one_or_none()
+        if snd is None:
+            await cb.answer("Sound not found", show_alert=True)
+            return
+        await session.execute(
+            sql_update(Sound)
+            .where(Sound.id == sid)
+            .values(play_count=Sound.play_count + 1)
+        )
+        session.add(
+            PlayEvent(
+                sound_id=sid,
+                user_id=cb.from_user.id if cb.from_user else None,
+            )
+        )
+        await session.commit()
+
+    chat_id = cb.message.chat.id if cb.message else (
+        cb.from_user.id if cb.from_user else None
+    )
+    if chat_id is None:
+        await cb.answer()
+        return
+
+    if snd.kind == "voice":
+        await context.bot.send_voice(chat_id, voice=snd.file_id, caption=snd.name)
+    elif snd.kind == "audio":
+        await context.bot.send_audio(chat_id, audio=snd.file_id, caption=snd.name)
+    else:
+        await context.bot.send_document(chat_id, document=snd.file_id, caption=snd.name)
+
+    await cb.answer()
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +403,10 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("random", cmd_random))
     app.add_handler(CommandHandler("list", cmd_list))
+    app.add_handler(CommandHandler("board", cmd_board))
     app.add_handler(InlineQueryHandler(handle_inline))
     app.add_handler(ChosenInlineResultHandler(handle_chosen))
+    app.add_handler(CallbackQueryHandler(handle_play_callback, pattern=r"^play:"))
     app.add_handler(
         MessageHandler(
             (filters.VOICE | filters.AUDIO | filters.Document.ALL)
