@@ -5,10 +5,15 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    ports:
-      - "${PORT:-8000}:8000"
+    # Port 8000 is intentionally NOT published to the host. The
+    # bot is reached internally by nginx over the shared `web` network.
+    # Uncomment the next two lines if you want direct host access too:
+    # ports:
+    #   - "${PORT:-8000}:8000"
     volumes:
       - sounds_data:/data
+    networks:
+      - web
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status == 200 else 1)"]
       interval: 30s
@@ -41,3 +46,7 @@ services:
 
 volumes:
   sounds_data:
+
+networks:
+  web:
+    external: true
